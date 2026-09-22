@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# Data + run artifacts (regenerated; too big for git)
+data/
+*.bin
+results.jsonl
+
+# OS / editor
+.DS_Store
+.ipynb_checkpoints/
+.vscode/

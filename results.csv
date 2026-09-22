@@ -1,0 +1,8 @@
+coupling,batch_size,seq_len,n_layer,d_model,params_millions,max_iters,final_train_loss,val_loss,tokens_per_sec,peak_mem_gb,max_batch,tokens_per_sec_at_max,peak_mem_gb_at_max,is_max_batch_sweep
+none,32.0,256,10.0,256.0,20.754,2000.0,2.8213,2.7235,14229.9,6.819,,,,
+euler,32.0,256,10.0,256.0,20.754,2000.0,2.837,2.7312,12961.6,5.258,,,,
+midpoint,32.0,256,10.0,256.0,20.754,2000.0,2.7669,2.6632,12829.6,5.258,,,,
+leapfrog,32.0,256,10.0,256.0,20.754,2000.0,2.8094,2.7017,12689.3,5.258,,,,
+none,,256,,,20.754,,,,,,56.0,14190.0,11.699,True
+euler,,256,,,20.754,,,,,,64.0,13199.8,10.221,True
+midpoint,,256,,,20.754,,,,,,64.0,13002.7,10.221,True
