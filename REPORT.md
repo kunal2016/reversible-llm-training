@@ -1,10 +1,5 @@
 # Reversible Language Models — Training Report
 
-**Name:** Kunal Sinha
-**Course / Session:** ERA V5
-**Date:** 2026-09-22
-
----
 
 ## 1. Objective
 
