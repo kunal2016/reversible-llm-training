@@ -1,0 +1,4 @@
+coupling,batch_size,seq_len,n_layer,d_model,params_millions,max_iters,final_train_loss,val_loss,tokens_per_sec,peak_mem_gb
+none,56,256,10,256,20.754,2000,2.5358,2.5715,12650.9,11.698
+euler,64,256,10,256,20.754,2000,2.4885,2.5471,11517.0,10.221
+midpoint,64,256,10,256,20.754,2000,2.4109,2.4753,12261.0,10.221

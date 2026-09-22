@@ -41,8 +41,29 @@ data.py              tokenize ~50M tokens -> train.bin / val.bin (GPT-2 BPE)
 train.py             training loop, logs metrics to results.jsonl
 sweep.py             doubles batch until OOM -> reports max stable batch
 test_reversible.py   correctness checks (invertibility + grad equivalence)
-reversible_llm_colab.ipynb   Drive-backed Colab runner (GPU)
+reversible_llm_colab.ipynb       Colab runner — fixed-batch comparison + OOM sweep
+reversible_llm_colab_run.ipynb   the above, executed on a T4 (with output logs)
+max_batch_experiment.ipynb       Colab runner — training at max sustainable batch
 ```
+
+## Two experiments
+
+1. **Fixed-batch comparison** (`reversible_llm_colab.ipynb`) — all four configs at the
+   same batch (32), isolating reversibility's effect on memory, throughput and loss;
+   plus a max-stable-batch OOM sweep. This is the core comparison.
+2. **Max-batch training** (`max_batch_experiment.ipynb`) — baseline and reversible each
+   trained at their own max stable batch (baseline 56, reversible 64), recording
+   tokens/sec, peak memory and final loss at that batch.
+
+   | Config | Batch | Val loss | Peak mem (GB) | Tokens/sec |
+   |---|---|---|---|---|
+   | Baseline | 56 | 2.5715 | 11.698 | 12,651 |
+   | Euler | 64 | 2.5471 | 10.221 | 11,517 |
+   | **Midpoint** | 64 | **2.4753** | 10.221 | 12,261 |
+
+   At max batch both reversible variants **beat the baseline on loss** at lower memory —
+   the memory headroom buys a larger batch (more tokens/step), which here yields a better
+   loss. ![Max-batch results](results_maxbatch_figure.png)
 
 ## The integrators
 

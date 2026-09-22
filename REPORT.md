@@ -1,5 +1,11 @@
 # Reversible Language Models — Training Report
 
+**Name:** Kunal Sinha
+**Course / Session:** ERA V5
+**Date:** 2026-09-22
+
+---
+
 ## 1. Objective
 
 Train a ~20M-parameter language model on ~50M tokens and compare a standard
@@ -39,6 +45,12 @@ Identical across all runs so the comparison is clean:
 Batch-size sweep method: double the batch from 8 until CUDA OOM, then binary
 back-off to the exact ceiling (`sweep.py`).
 
+**Execution environment.** Runs were executed on **Google Colab** with an **NVIDIA
+T4 (16 GB)** GPU (the local laptop has only Intel integrated graphics, no CUDA),
+PyTorch 2.x + CUDA, bf16 autocast. Data was tokenized once to Google Drive and
+reused across all runs. The executed notebook with full logs is
+`reversible_llm_colab_run.ipynb`; the clean runner is `reversible_llm_colab.ipynb`.
+
 ---
 
 ## 3. Run Configurations
@@ -71,7 +83,30 @@ back-off to the exact ceiling (`sweep.py`).
 | B — Euler | 64 | 10.221 | 13,200 |
 | C — Midpoint | 64 | 10.221 | 13,003 |
 
-![Results](results_figure.png)
+### Trained at max sustainable batch (all-participants item)
+
+Full 2000-step runs at each config's max stable batch, recording final loss +
+tokens/sec + peak memory at that batch.
+
+| Run | Batch | Final train loss | Val loss | Tokens/sec | Peak memory (GB) |
+|---|---|---|---|---|---|
+| A — Baseline | 56 | 2.5358 | 2.5715 | 12,651 | 11.698 |
+| B — Euler | 64 | 2.4885 | 2.5471 | 11,517 | 10.221 |
+| C — Midpoint | 64 | **2.4109** | **2.4753** | 12,261 | 10.221 |
+
+At each config's max batch, both reversible variants reach a **lower loss than the
+baseline** (midpoint best: val 2.4753 vs 2.5715), while using **less peak memory**
+(10.22 vs 11.70 GB) and comparable throughput. Note this is not a fully controlled
+comparison — baseline trains at batch 56, reversible at 64, so in 2000 steps the
+reversible runs see ~14% more tokens (32.8M vs 28.7M). That extra token budget *is*
+the benefit: reversibility's memory headroom lets you train a larger batch — more
+tokens — within the same GPU budget, and here that translates into a better loss.
+All max-batch losses are lower than their batch-32 counterparts (Section 4.1),
+simply because the larger batch processes more tokens over the same 2000 steps.
+
+![Fixed-batch results](results_figure.png)
+
+![Max-batch results](results_maxbatch_figure.png)
 
 ---
 
