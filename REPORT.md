@@ -24,12 +24,13 @@ Identical across all runs so the comparison is clean:
 |---|---|
 | Model params | 20.75M (identical for all 4 configs) |
 | Dataset | TinyStories (GPT-2 BPE) |
-| Total tokens | 50M (47.5M train / 2.5M val) |
+| Dataset size | 50M tokens (47.5M train / 2.5M val) — the corpus, **not** tokens trained per run |
 | Sequence length | 256 |
 | Layers / d_model / heads | 10 / 256 / 8 |
 | Optimizer / LR | AdamW, 3e-4, cosine decay, 100 warmup |
 | Betas / weight decay | (0.9, 0.95) / 0.1 |
-| Training steps | 2000 (same for all runs) |
+| Training steps | 2000 (fixed-batch & max-batch runs in 4.1–4.2) |
+| Training tokens / run | batch × seq × steps, e.g. 32×256×2000 = **16.4M** at batch 32 |
 | Batch size (fixed runs) | 32 |
 | Precision | bf16 autocast |
 | Dropout | 0 (required for exact reconstruction) |
@@ -89,19 +90,42 @@ tokens/sec + peak memory at that batch.
 | B — Euler | 64 | 2.4885 | 2.5471 | 11,517 | 10.221 |
 | C — Midpoint | 64 | **2.4109** | **2.4753** | 12,261 | 10.221 |
 
-At each config's max batch, both reversible variants reach a **lower loss than the
-baseline** (midpoint best: val 2.4753 vs 2.5715), while using **less peak memory**
-(10.22 vs 11.70 GB) and comparable throughput. Note this is not a fully controlled
-comparison — baseline trains at batch 56, reversible at 64, so in 2000 steps the
-reversible runs see ~14% more tokens (32.8M vs 28.7M). That extra token budget *is*
-the benefit: reversibility's memory headroom lets you train a larger batch — more
-tokens — within the same GPU budget, and here that translates into a better loss.
-All max-batch losses are lower than their batch-32 counterparts (Section 4.1),
-simply because the larger batch processes more tokens over the same 2000 steps.
+At each config's max batch the reversible variants show lower loss and lower peak
+memory — but **this comparison is not token-matched, so it must not be read as an
+accuracy gain from reversibility.** Each run used a fixed 2000 *steps*, so the arms
+trained on different token totals: baseline 56×256×2000 = **28.7M**, reversible
+64×256×2000 = **32.8M** (~14% more). The fixed-batch runs in 4.1 likewise trained on
+32×256×2000 = **16.4M** tokens — not the 50M dataset size. The lower reversible loss
+here is partly just more data seen; the memory and max-batch findings stand, the
+accuracy comparison does not.
 
-![Fixed-batch results](results_figure.png)
+**Correction (mentor feedback).** To attribute any accuracy change to the method, every
+arm must train to the *same* token budget. `equal_token_budget_experiment.ipynb` reruns
+all arms to an identical **50M-token budget** (`--target_tokens 50000000`, which sets
+iters per batch: 32→6104, 56→3488, 64→3052). **Warmup scales to 5% of steps** (305/174/153); peak LR is held at 3e-4 (cosine → 10%) identically across all arms, so coupling is the only variable. Corrected numbers below.
 
-![Max-batch results](results_maxbatch_figure.png)
+### Equal token-budget runs (50M tokens/arm) — token-matched comparison
+
+Every arm trained to **train_tokens = 50,003,968** (iters auto-set per batch), warmup 5%, LR 3e-4.
+
+**Experiment A — equal batch (32), 50M tokens** (controlled: batch *and* tokens matched)
+
+| Run | Batch | Train loss | Val loss | Tokens/sec | Peak mem (GB) |
+|---|---|---|---|---|---|
+| Baseline | 32 | 2.1087 | 2.0887 | 13,959 | 6.819 |
+| Euler | 32 | 2.1327 | 2.1022 | 11,887 | 5.258 |
+| **Midpoint** | 32 | **2.0675** | **2.0520** | 11,827 | 5.258 |
+| Leapfrog | 32 | 2.1095 | 2.0858 | 11,657 | 5.258 |
+
+**Experiment B — max batch per arm, 50M tokens** (token-fair version of the max-batch comparison)
+
+| Run | Batch | Train loss | Val loss | Tokens/sec | Peak mem (GB) |
+|---|---|---|---|---|---|
+| Baseline | 56 | 2.1946 | 2.2175 | 13,184 | 11.698 |
+| Euler | 64 | 2.2072 | 2.2728 | 12,034 | 10.221 |
+| **Midpoint** | 64 | **2.1415** | **2.2060** | 11,378 | 10.221 |
+
+![Equal-budget results](results_equal_figure.png)
 
 ---
 
@@ -129,14 +153,23 @@ backward pass. Because the batch-size gain here is small, that saved memory did
 not convert into a throughput win (the mechanism behind the paper's ~2× speed-up).
 At this depth reversibility is a memory technique, not a speed technique.
 
-**Euler vs midpoint (and leapfrog).** **Midpoint was the best variant**, reaching
-the lowest loss of all four — val 2.6632, *below* the baseline's 2.7235 (−0.060)
-— confirming the paper's finding that reversibility is "comparable or slightly
-better," and that the symmetric 2nd-order-accurate midpoint integrator can even
-help optimization. Ordering by val loss: **midpoint (2.6632) < leapfrog (2.7017)
-< baseline (2.7235) < euler (2.7312)**. Euler was marginally worse than baseline
-(+0.008, within run-to-run noise); the two multi-step schemes (midpoint, leapfrog)
-both beat baseline. All ran stably at h = 0.5 with no divergence.
+**Euler vs midpoint (token-matched — the authoritative accuracy result).** Under
+the corrected equal-budget comparison (Experiment A: same batch 32 *and* same 50M
+tokens), **midpoint is still the best variant** — val **2.0520**, below the
+baseline's 2.0887 (−0.037). Leapfrog is essentially tied with baseline (2.0858,
+−0.003) and Euler is marginally worse (2.1022, +0.014). Ordering: **midpoint <
+leapfrog ≈ baseline < euler**. Once the token confound is removed, the gap is
+smaller than the earlier fixed-step numbers suggested, but the *direction* holds:
+reversibility costs no accuracy, and the symmetric midpoint integrator modestly
+helps. Experiment B (each arm at its max batch, still 50M tokens) tells the same
+story — midpoint edges baseline (2.2060 vs 2.2175), euler trails — and its losses
+are uniformly higher than Experiment A because a larger batch under a fixed token
+budget means fewer optimizer steps (3052–3488 vs 6104): a batch-size/steps
+tradeoff, not a reversibility effect. All arms trained stably at h = 0.5, LR 3e-4.
+
+(The earlier fixed-iteration runs in Sections 4.1–4.2 are retained for the memory,
+throughput and max-batch findings, which are unaffected; their loss comparison is
+superseded by the token-matched numbers here.)
 
 **Surprises / gotchas.** (1) All reversible variants report identical peak memory
 because the memory is dominated by the recompute footprint, which is the same
@@ -148,9 +181,10 @@ batch *ratio* is the robust number, not the absolute value. (3) Dropout had to b
 
 ## 6. Conclusions
 
-- **Best variant: midpoint** — lowest train and val loss (val 2.6632, beating the
-  baseline), same 22.9% memory saving as the other reversible schemes, and stable
-  training. It gives the best loss *and* the memory benefit.
+- **Best variant: midpoint** — lowest train and val loss under the token-matched
+  comparison (val **2.0520** vs baseline 2.0887, −0.037), the same 22.9% memory
+  saving as the other reversible schemes, and stable training. It gives the best
+  loss *and* the memory benefit even when every arm sees an identical 50M tokens.
 - **Reversibility for the upcoming B200 training targets: yes, with scale.** At
   10 layers the memory win is modest (23%) and doesn't yet pay off in throughput.
   But the benefit grows with depth — the paper's ~10× batch and ~2× throughput
@@ -170,6 +204,11 @@ python train.py --coupling none     --batch_size 32 --max_iters 2000 --eval_val
 python train.py --coupling euler    --batch_size 32 --max_iters 2000 --eval_val
 python train.py --coupling midpoint --batch_size 32 --max_iters 2000 --eval_val
 python train.py --coupling leapfrog --batch_size 32 --max_iters 2000 --eval_val
+
+# Equal 50M-token budget (correction): iters auto-set per batch
+python train.py --coupling none     --batch_size 32 --target_tokens 50_000_000 --eval_val
+python train.py --coupling none     --batch_size 56 --target_tokens 50_000_000 --eval_val
+python train.py --coupling midpoint --batch_size 64 --target_tokens 50_000_000 --eval_val
 python sweep.py --coupling none
 python sweep.py --coupling euler
 python sweep.py --coupling midpoint

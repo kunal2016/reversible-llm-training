@@ -80,6 +80,15 @@ def run(args):
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
 
+    # Equal-token-budget mode: override max_iters so every arm trains on the
+    # SAME number of tokens regardless of batch size (tokens = batch*seq*iters).
+    if getattr(args, "target_tokens", 0) and args.target_tokens > 0:
+        import math as _math
+        args.max_iters = max(1, _math.ceil(args.target_tokens / (args.batch_size * args.seq_len)))
+        args.warmup = max(50, round(0.05 * args.max_iters))  # 5% warmup, scales with run length
+        print(f"[token-budget] target={args.target_tokens:,} tokens -> max_iters={args.max_iters} "
+              f"(batch {args.batch_size} x seq {args.seq_len})")
+
     meta_path = os.path.join(args.data_dir, "meta.json")
     vocab_size = 50257
     if os.path.exists(meta_path):
@@ -100,11 +109,41 @@ def run(args):
     if device.startswith("cuda"):
         torch.cuda.reset_peak_memory_stats()
 
+    # --- checkpoint resume (survives Colab disconnects) ---
+    ckpt_path = None
+    start_iter = 0
+    if args.ckpt_dir:
+        os.makedirs(args.ckpt_dir, exist_ok=True)
+        tag = f"{args.coupling}_b{args.batch_size}_n{args.max_iters}"
+        ckpt_path = os.path.join(args.ckpt_dir, f"ckpt_{tag}.pt")
+        if os.path.exists(ckpt_path):
+            ck = torch.load(ckpt_path, map_location=device, weights_only=False)
+            raw.load_state_dict(ck["model"])
+            opt.load_state_dict(ck["opt"])
+            start_iter = ck["iter"] + 1
+            try:
+                torch.set_rng_state(ck["rng_cpu"])
+                if device.startswith("cuda") and ck.get("rng_cuda") is not None:
+                    torch.cuda.set_rng_state(ck["rng_cuda"])
+            except Exception:
+                pass
+            print(f"[resume] loaded {ckpt_path} at iter {ck['iter']} -> continuing from {start_iter}")
+
+    def _save_ckpt(it):
+        if not ckpt_path:
+            return
+        tmp = ckpt_path + ".tmp"
+        torch.save({"iter": it, "model": raw.state_dict(), "opt": opt.state_dict(),
+                    "rng_cpu": torch.get_rng_state(),
+                    "rng_cuda": torch.cuda.get_rng_state() if device.startswith("cuda") else None},
+                   tmp)
+        os.replace(tmp, ckpt_path)  # atomic: a disconnect mid-write never corrupts the live file
+
     model.train()
     t0 = time.time()
     tokens_seen = 0
     last_loss = float("nan")
-    for it in range(args.max_iters):
+    for it in range(start_iter, args.max_iters):
         lr = lr_at(it, args.warmup, args.max_iters, args.lr, args.lr / 10)
         for g in opt.param_groups:
             g["lr"] = lr
@@ -127,6 +166,9 @@ def run(args):
             tps = tokens_seen / max(elapsed, 1e-9)
             print(f"  it {it:5d} | loss {last_loss:.4f} | lr {lr:.2e} | {tps:,.0f} tok/s")
 
+        if ckpt_path and args.ckpt_every > 0 and (it + 1) % args.ckpt_every == 0:
+            _save_ckpt(it)
+
     if device.startswith("cuda"):
         torch.cuda.synchronize()
     elapsed = time.time() - t0
@@ -143,6 +185,8 @@ def run(args):
         "d_model": args.d_model,
         "params_millions": round(n_params / 1e6, 3),
         "max_iters": args.max_iters,
+        "train_tokens": args.max_iters * args.batch_size * args.seq_len,
+        "target_tokens": getattr(args, "target_tokens", 0),
         "final_train_loss": round(last_loss, 4),
         "val_loss": round(val_loss, 4) if val_loss is not None else None,
         "tokens_per_sec": round(tokens_per_sec, 1),
@@ -151,6 +195,11 @@ def run(args):
     print("RESULT " + json.dumps(result))
     with open(args.results, "a") as f:
         f.write(json.dumps(result) + "\n")
+    if ckpt_path and os.path.exists(ckpt_path):
+        try:
+            os.remove(ckpt_path)  # run finished; free Drive space
+        except OSError:
+            pass
     return result
 
 
@@ -165,11 +214,15 @@ def build_argparser():
     ap.add_argument("--n_head", type=int, default=8)
     ap.add_argument("--dropout", type=float, default=0.0)
     ap.add_argument("--max_iters", type=int, default=3000)
+    ap.add_argument("--target_tokens", type=int, default=0,
+                    help="if >0, train to this many tokens (overrides --max_iters so all batch sizes see an equal budget)")
     ap.add_argument("--warmup", type=int, default=100)
     ap.add_argument("--lr", type=float, default=3e-4)
     ap.add_argument("--weight_decay", type=float, default=0.1)
     ap.add_argument("--data_dir", default="data")
     ap.add_argument("--results", default="results.jsonl")
+    ap.add_argument("--ckpt_dir", default="", help="if set, save/resume a checkpoint here every --ckpt_every iters (survives disconnects)")
+    ap.add_argument("--ckpt_every", type=int, default=1000, help="checkpoint interval in iters when --ckpt_dir is set")
     ap.add_argument("--log_every", type=int, default=100)
     ap.add_argument("--eval_val", action="store_true")
     ap.add_argument("--compile", action="store_true")
